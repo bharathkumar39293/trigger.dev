@@ -72,6 +72,8 @@ For external side effects, such as payments, also use the external provider's id
 
 For a payment operation, use a deterministic business-operation ID to derive idempotency keys for both layers. Trigger.dev deduplicates child task triggers, while your payment provider deduplicates requests for the same operation.
 
+<CodeGroup>
+
 ```ts trigger/refund.ts
 import { task } from "@trigger.dev/sdk";
 import Stripe from "stripe";
@@ -100,7 +102,7 @@ export const refundPayment = task({
 ```
 
 ```ts trigger/initiate-refund.ts
-import { task } from "@trigger.dev/sdk";
+import { idempotencyKeys, task } from "@trigger.dev/sdk";
 import { refundPayment } from "./refund";
 
 export const initiateRefund = task({
@@ -110,8 +112,9 @@ export const initiateRefund = task({
     paymentIntentId: string;
     amount: number;
   }) => {
-    // Use an ID that identifies this business operation, not a random value.
+    // refundId must identify one unique business operation, not a random value.
     const operationId = `refund:${payload.refundId}`;
+    const idempotencyKey = await idempotencyKeys.create(operationId, { scope: "global" });
 
     await refundPayment.trigger(
       {
@@ -120,13 +123,19 @@ export const initiateRefund = task({
         operationId,
       },
       {
-        // Trigger.dev deduplicates this child task trigger when this task retries.
-        idempotencyKey: operationId,
+        // Trigger.dev deduplicates this child task trigger across parent runs.
+        idempotencyKey,
       }
     );
   },
 });
 ```
+
+</CodeGroup>
+
+<Warning>
+Stripe can prune idempotency keys after 24 hours. If a refund workflow can retry later, persist the business operation and Stripe refund ID, then reconcile with Stripe before issuing another refund.
+</Warning>
 
 This does not provide a universal exactly-once guarantee for arbitrary distributed side effects. Trigger.dev deduplicates task triggers, while Stripe uses the idempotency key to safely retry the same refund request.
 
